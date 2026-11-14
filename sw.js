@@ -1,5 +1,5 @@
 // Service worker : l'application fonctionne même hors ligne une fois ouverte.
-const CACHE = 'hoplafi-v1';
+const CACHE = 'hoplafi-v2';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/mqtt.js', 'js/signal.js', 'js/net.js', 'js/peer.js', 'js/transfer.js',
