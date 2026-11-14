@@ -2,7 +2,7 @@
 import {
   $, el, randomId, formatBytes, formatSpeed, formatDuration, formatClock, detectDevice, KIND_LABEL,
 } from './util.js';
-import { Mesh, getPublicIPs, v6Prefix } from './net.js';
+import { Mesh, getPublicIPs, lanSecrets } from './net.js';
 import { relayStatus } from './signal.js';
 import { Peer } from './peer.js';
 import { Transfers } from './transfer.js';
@@ -51,7 +51,7 @@ const state = {
   noNetwork: false,
   ipsReady: false,
   mesh: null,
-  lanRoom: null,
+  lanRooms: new Map(),        // secret -> { room, misses }
   peers: new Map(),           // deviceId -> Peer (affichés)
   verifying: new Map(),       // Peer -> { symbols, localOk, remoteOk, code }
   code: null,                 // fenêtre du code secret
@@ -87,13 +87,9 @@ async function setOn(on, auto = false) {
     state.mesh = mesh;
     mesh.on('connection', onConnection);
     render();
-    const ips = await getPublicIPs();
+    await syncNetwork();
     if (session !== state.session) return;
-    mesh.myIPs = ips;
     state.ipsReady = true;
-    const secret = ips.v4 ? 'lan4:' + ips.v4 : ips.v6 ? 'lan6:' + v6Prefix(ips.v6) : null;
-    if (secret) state.lanRoom = mesh.join(secret, 'lan');
-    else state.noNetwork = true;
     render();
   } else {
     state.autoOffHappened = auto;
@@ -101,13 +97,72 @@ async function setOn(on, auto = false) {
     closeOverlay();
     const mesh = state.mesh;
     state.mesh = null;
-    state.lanRoom = null;
+    state.lanRooms.clear();
     for (const p of [...state.peers.values()]) transfers.detach(p);
     state.peers.clear();
     state.verifying.clear();
     if (mesh) await mesh.leaveAll();
     render();
   }
+}
+
+// Détecte le réseau et rejoint les « salles » correspondantes. Relancé
+// régulièrement : l'adresse change quand la box redémarre, quand un téléphone
+// passe de la 4G au Wi-Fi, ou quand l'ordinateur sort de veille.
+let syncing = false;
+async function syncNetwork() {
+  if (!state.on || syncing) return;
+  syncing = true;
+  const session = state.session;
+  const mesh = state.mesh;
+  try {
+    const ips = await getPublicIPs();
+    if (session !== state.session || !mesh) return;
+    const secrets = lanSecrets(ips);
+    if (!secrets.length) {
+      // Détection ratée (coupure passagère ?) : on garde les salles actuelles.
+      if (!state.lanRooms.size) state.noNetwork = true;
+      return;
+    }
+    state.noNetwork = false;
+    mesh.myIPs = {
+      v4: [...new Set([...ips.v4, ...mesh.myIPs.v4])].slice(0, 8),
+      v6: [...new Set([...ips.v6, ...mesh.myIPs.v6])].slice(0, 8),
+    };
+    for (const s of secrets) {
+      const cur = state.lanRooms.get(s);
+      if (cur) cur.misses = 0;
+      else state.lanRooms.set(s, { room: mesh.join(s, 'lan'), misses: 0 });
+    }
+    for (const [s, cur] of [...state.lanRooms]) {
+      if (secrets.includes(s)) continue;
+      if (++cur.misses >= 2) { // adresse disparue deux fois de suite : on quitte cette salle
+        state.lanRooms.delete(s);
+        mesh.leave(cur.room);
+      }
+    }
+  } finally {
+    syncing = false;
+  }
+}
+
+function diagText() {
+  const m = state.mesh ? state.mesh.myIPs : { v4: [], v6: [] };
+  const r = relayStatus();
+  return `Diagnostic : IPv4 ${m.v4.length ? 'détectée' : 'non détectée'} · IPv6 ${m.v6.length ? 'détectée' : 'non détectée'} · relais ${r.up}/${r.total}`;
+}
+
+let lastSync = Date.now();
+function resync(force) {
+  if (!state.on || !state.ipsReady) return;
+  if (Date.now() - lastSync < (force ? 8000 : 60000)) return;
+  lastSync = Date.now();
+  syncNetwork().then(render);
+}
+setInterval(() => resync(false), 5000);
+window.addEventListener('online', () => resync(true));
+if (navigator.connection && navigator.connection.addEventListener) {
+  navigator.connection.addEventListener('change', () => resync(true));
 }
 
 // ---------- Connexions ----------
@@ -591,7 +646,8 @@ function renderSettings() {
     el('label', { class: 'lbl', for: 'auto-off' }, 'Passage en OFF automatique'), sel,
     el('span', { class: 'small-note' }, 'Au lancement, Hoplàfi démarre toujours sur ON.')));
   const extra = el('div', { class: 'sep' },
-    el('p', { class: 'small-note' }, 'Les fichiers vont directement d\'un appareil à l\'autre, chiffrés. Ils ne passent par aucun serveur.'));
+    el('p', { class: 'small-note' }, 'Les fichiers vont directement d\'un appareil à l\'autre, chiffrés. Ils ne passent par aucun serveur.'),
+    state.on && state.ipsReady ? el('p', { class: 'small-note', id: 'diag' }, diagText()) : null);
   if (state.installPrompt) {
     extra.prepend(el('button', { type: 'button', class: 'btn', onclick: async () => {
       const p = state.installPrompt; state.installPrompt = null;
@@ -930,7 +986,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { updateTab(); refreshFolderPerm(); }
+  if (document.visibilityState === 'visible') { resync(true); updateTab(); refreshFolderPerm(); }
 });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {

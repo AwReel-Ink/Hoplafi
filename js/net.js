@@ -41,28 +41,38 @@ export function isPrivateIP(ip) {
   return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || p.join(':') === '0000:0000:0000:0000:0000:0000:0000:0001';
 }
 
-export async function getPublicIPs(timeout = 5000) {
+// Renvoie toutes les adresses publiques vues : { v4: [adresses], v6: [préfixes /64] }.
+// On attend IPv4 ET IPv6 : selon l'appareil, l'une ou l'autre peut manquer ou
+// différer (opérateurs qui partagent les IPv4), et il suffit d'une en commun.
+export async function getPublicIPs(timeout = 4500) {
   const dev = devParam('ip');
-  if (dev) return { v4: dev, v6: null };
-  const found = { v4: null, v6: null };
+  if (dev) return { v4: dev.split(',').filter((x) => !x.includes(':')), v6: dev.split(',').filter((x) => x.includes(':')).map(v6Prefix) };
+  const v4 = new Set(), v6 = new Set();
   let pc;
   try {
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   } catch (e) {
-    return found;
+    return { v4: [], v6: [] };
   }
   pc.createDataChannel('ip');
   const done = new Promise((resolve) => {
     const timer = setTimeout(resolve, timeout);
+    let grace = null;
     pc.onicecandidate = (ev) => {
-      if (!ev.candidate) { clearTimeout(timer); resolve(); return; }
+      if (!ev.candidate) { clearTimeout(timer); clearTimeout(grace); resolve(); return; }
       const c = ev.candidate.candidate || '';
-      if (!/ typ srflx/.test(c)) return;
+      const type = (/ typ (\w+)/.exec(c) || [])[1];
       const ip = ev.candidate.address || c.split(' ')[4];
-      if (!ip) return;
-      if (ip.includes(':')) found.v6 = found.v6 || ip;
-      else found.v4 = found.v4 || ip;
-      if (found.v4) { clearTimeout(timer); resolve(); }
+      if (!ip || ip.endsWith('.local') || isPrivateIP(ip)) return;
+      if (ip.includes(':')) {
+        // IPv6 publique : pas de traduction d'adresse, l'adresse de l'appareil suffit.
+        const p = (type === 'srflx' || type === 'host') && v6Prefix(ip);
+        if (p && !p.startsWith('0000')) v6.add(p);
+      } else if (type === 'srflx') {
+        v4.add(ip);
+      }
+      // Une fois une adresse trouvée, on laisse encore un peu de temps aux autres.
+      if (!grace) grace = setTimeout(resolve, 1500);
     };
   });
   try {
@@ -70,7 +80,11 @@ export async function getPublicIPs(timeout = 5000) {
     await done;
   } catch (e) { /* rien */ }
   pc.close();
-  return found;
+  return { v4: [...v4].slice(0, 4), v6: [...v6].slice(0, 4) };
+}
+
+export function lanSecrets(ips) {
+  return [...ips.v4.map((a) => 'lan4:' + a), ...ips.v6.map((p) => 'lan6:' + p)];
 }
 
 // ---------- Vérification « même réseau » ----------
@@ -104,8 +118,9 @@ export async function isSameNetwork(pc, myIPs) {
       if (r.type === 'host' || isPrivateIP(r.address)) return true;
       if (r.type === 'relay') return false;
       if (!r.address) return true; // adresse masquée par le navigateur : on ne bloque pas
-      if (myIPs.v4 && r.address === myIPs.v4) return true;
-      if (myIPs.v6 && v6Prefix(r.address) && v6Prefix(r.address) === v6Prefix(myIPs.v6)) return true;
+      if (myIPs.v4.includes(r.address)) return true;
+      const p = v6Prefix(r.address);
+      if (p && myIPs.v6.includes(p)) return true;
       return false;
     }
     await sleep(300);
@@ -219,7 +234,7 @@ export class Mesh extends Emitter {
     this.selfId = selfId;
     this.rooms = new Set();
     this.conns = new Map(); // remoteId -> Conn
-    this.myIPs = { v4: null, v6: null };
+    this.myIPs = { v4: [], v6: [] };
     this.lastHi = new Map();
   }
 
@@ -261,10 +276,9 @@ export class Mesh extends Emitter {
         }
       }
     } else if (m.t === 'offer' && m.sdp) {
-      if (existing && !existing.closed) {
-        if (existing.open) return;
-        existing.close();
-      }
+      // L'autre appareil ne rappelle que s'il a perdu la connexion : on repart de zéro
+      // au lieu d'attendre que la coupure soit détectée de notre côté.
+      if (existing && !existing.closed) existing.close();
       const conn = new Conn(this, m.from, room, false);
       this.conns.set(m.from, conn);
       await conn.pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
