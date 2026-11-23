@@ -95,7 +95,7 @@ export function lanSecrets(ips) {
 // connaîtrait cette IP ne puisse pas apparaître dans la liste, on vérifie la
 // connexion réellement établie : adresse locale, ou même IP publique que nous.
 
-async function selectedRemote(pc) {
+async function selectedPair(pc) {
   const stats = await pc.getStats();
   const byId = new Map();
   let pairId = null;
@@ -110,21 +110,42 @@ async function selectedRemote(pc) {
     });
   }
   if (!pair) return null;
-  const rc = byId.get(pair.remoteCandidateId);
-  return rc ? { type: rc.candidateType, address: rc.address || rc.ip || '' } : null;
+  const c = (id) => {
+    const x = byId.get(id);
+    return x ? { type: x.candidateType || '', address: x.address || x.ip || '' } : { type: '', address: '' };
+  };
+  return { remote: c(pair.remoteCandidateId), local: c(pair.localCandidateId) };
+}
+
+// Décide si la connexion établie relie bien deux appareils du même réseau.
+// Séparée du reste pour pouvoir être testée.
+export function sameNetworkVerdict(pair, myIPs) {
+  const r = pair.remote;
+  if (r.type === 'relay') return false;
+  if (r.type === 'host' || isPrivateIP(r.address)) return true;
+  if (!r.address || r.address.endsWith('.local')) return true; // adresse masquée par le navigateur
+  if (myIPs.v4.includes(r.address)) return true;
+  const p = v6Prefix(r.address);
+  if (p) {
+    // IPv6 : même préfixe /64 que nous = même box. Certains navigateurs (Brave,
+    // par exemple) ne nous laissent pas connaître notre propre IPv6 : on la lit
+    // alors sur notre côté de la connexion, et si elle est cachée aussi, on
+    // fait confiance (il a de toute façon fallu connaître notre IPv4 pour arriver ici).
+    if (myIPs.v6.includes(p)) return true;
+    const lp = v6Prefix(pair.local.address || '');
+    if (lp) return lp === p;
+    return true;
+  }
+  return false;
 }
 
 export async function isSameNetwork(pc, myIPs) {
   for (let i = 0; i < 5; i++) {
-    const r = await selectedRemote(pc).catch(() => null);
-    if (r) {
-      if (r.type === 'host' || isPrivateIP(r.address)) return true;
-      if (r.type === 'relay') return false;
-      if (!r.address) return true; // adresse masquée par le navigateur : on ne bloque pas
-      if (myIPs.v4.includes(r.address)) return true;
-      const p = v6Prefix(r.address);
-      if (p && myIPs.v6.includes(p)) return true;
-      return false;
+    const pair = await selectedPair(pc).catch(() => null);
+    if (pair) {
+      const ok = sameNetworkVerdict(pair, myIPs);
+      if (!ok) console.warn('[hoplafi] connexion refusée', JSON.stringify(pair));
+      return ok;
     }
     await sleep(300);
   }
@@ -208,12 +229,14 @@ export class Conn extends Emitter {
     if (this.kind === 'lan') {
       const ok = await isSameNetwork(this.pc, this.mesh.myIPs);
       if (!ok) {
-        console.warn('[hoplafi] connexion refusée : pas sur le même réseau');
+        this.mesh.stats.refused++;
+        this.refused = true;
         this.close();
         return;
       }
     }
     if (this.closed) return;
+    this.mesh.stats.ok++;
     this.mesh.emit('connection', this);
   }
 
@@ -223,6 +246,7 @@ export class Conn extends Emitter {
   close() {
     if (this.closed) return;
     this.closed = true;
+    if (!this.open && this.kind === 'lan') this.mesh.stats.failed++;
     clearTimeout(this.timeout);
     clearTimeout(this.dcTimer);
     try { this.pc.close(); } catch (e) { /* rien */ }
@@ -238,6 +262,7 @@ export class Mesh extends Emitter {
     this.rooms = new Set();
     this.conns = new Map(); // remoteId -> Conn
     this.myIPs = { v4: [], v6: [] };
+    this.stats = { ok: 0, refused: 0, failed: 0 };
     this.lastHi = new Map();
   }
 

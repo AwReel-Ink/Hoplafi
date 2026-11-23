@@ -17,7 +17,7 @@ import { qrSVG } from './qr.js';
 
 // Numéro de version : le seul endroit à modifier à chaque mise à jour.
 // Il s'affiche en bas de la page et renouvelle le cache de l'application.
-export const VERSION = '4';
+export const VERSION = '5';
 
 // ---------- Icônes ----------
 const I = {
@@ -153,7 +153,8 @@ async function syncNetwork() {
 function diagText() {
   const m = state.mesh ? state.mesh.myIPs : { v4: [], v6: [] };
   const r = relayStatus();
-  return `Diagnostic : ${device.browser} · IPv4 ${m.v4.length ? 'détectée' : 'non détectée'} · IPv6 ${m.v6.length ? 'détectée' : 'non détectée'} · relais ${r.up}/${r.total}`;
+  const c = state.mesh ? state.mesh.stats : { ok: 0, refused: 0, failed: 0 };
+  return `Diagnostic : ${device.browser} · IPv4 ${m.v4.length ? 'détectée' : 'non détectée'} · IPv6 ${m.v6.length ? 'détectée' : 'non détectée'} · relais ${r.up}/${r.total} · connexions ${c.ok} réussies, ${c.refused} refusées, ${c.failed} échouées`;
 }
 
 let lastSync = Date.now();
@@ -701,6 +702,8 @@ setInterval(() => {
     return;
   }
   renderTimer();
+  const dg = $('#diag');
+  if (dg) dg.textContent = diagText();
   // Le bandeau « vous ne trouvez pas » apparaît après quelques secondes.
   const shouldBanner = state.peers.size === 0 && Date.now() - state.onSince > 8000;
   if (shouldBanner !== state._banner) { state._banner = shouldBanner; render(); }
