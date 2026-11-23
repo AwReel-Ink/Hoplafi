@@ -23,7 +23,7 @@ Adresse : https://awreel-ink.github.io/Hoplafi/
 3. Allez dans **Settings › Pages**. Dans « Build and deployment », choisissez **Deploy from a branch**, branche **main**, dossier **/ (root)**, puis **Save**.
 4. Après une à deux minutes, l'application est en ligne sur https://awreel-ink.github.io/Hoplafi/
 
-Pour publier une mise à jour, renvoyez les fichiers modifiés et changez le numéro dans `sw.js` (`hoplafi-v1` → `hoplafi-v2`) pour que les appareils récupèrent la nouvelle version.
+Pour publier une mise à jour, renvoyez les fichiers modifiés et augmentez le numéro `VERSION` en haut de `js/app.js` (par exemple `'4'` → `'5'`). Les appareils récupèrent la nouvelle version au lancement suivant, et le numéro affiché en bas de la page change.
 
 ## Comment ça marche, sans serveur
 

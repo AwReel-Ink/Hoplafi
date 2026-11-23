@@ -2,9 +2,12 @@
 import { Room } from './signal.js';
 import { Emitter, devParam, sleep } from './util.js';
 
+// Trois serveurs STUN de fournisseurs différents : si un navigateur ou un réseau
+// en bloque un (Firefox avec la protection renforcée, par exemple), les autres répondent.
 export const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.services.mozilla.com:3478' },
 ];
 
 // ---------- Adresse IP publique (via STUN, sans serveur à nous) ----------

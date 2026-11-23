@@ -1,5 +1,7 @@
 // Service worker : l'application fonctionne même hors ligne une fois ouverte.
-const CACHE = 'hoplafi-v2';
+// Le numéro vient de js/app.js (sw.js?v=…) : il n'y a rien à changer ici.
+const VERSION = new URL(location.href).searchParams.get('v') || '0';
+const CACHE = 'hoplafi-v' + VERSION;
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/mqtt.js', 'js/signal.js', 'js/net.js', 'js/peer.js', 'js/transfer.js',
@@ -8,7 +10,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

@@ -15,6 +15,10 @@ import { ALPHABET, CODE_LENGTH, CODE_LIFETIME, newCode, formatCode, cleanCode, v
 import { symbolHTML } from './symbols.js';
 import { qrSVG } from './qr.js';
 
+// Numéro de version : le seul endroit à modifier à chaque mise à jour.
+// Il s'affiche en bas de la page et renouvelle le cache de l'application.
+export const VERSION = '4';
+
 // ---------- Icônes ----------
 const I = {
   power: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>',
@@ -149,7 +153,7 @@ async function syncNetwork() {
 function diagText() {
   const m = state.mesh ? state.mesh.myIPs : { v4: [], v6: [] };
   const r = relayStatus();
-  return `Diagnostic : IPv4 ${m.v4.length ? 'détectée' : 'non détectée'} · IPv6 ${m.v6.length ? 'détectée' : 'non détectée'} · relais ${r.up}/${r.total}`;
+  return `Diagnostic : ${device.browser} · IPv4 ${m.v4.length ? 'détectée' : 'non détectée'} · IPv6 ${m.v6.length ? 'détectée' : 'non détectée'} · relais ${r.up}/${r.total}`;
 }
 
 let lastSync = Date.now();
@@ -990,8 +994,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js?v=' + VERSION).catch(() => {});
 }
+
+$('#version').textContent = 'Version ' + VERSION;
 
 async function start() {
   await loadFolder();
